@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Учёт оплат</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --text:#1b1f24; --muted:#667085; --accent:#2563eb; --bad:#c0392b; --line:#e4e7ec; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#14171c; --card:#1d2229; --text:#eceff3; --muted:#9aa4b2; --accent:#5b8cff; --bad:#ff7a6b; --line:#2c333d; } }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:12px; font:16px system-ui,sans-serif; background:var(--bg); color:var(--text); }
+  main { max-width:560px; margin:0 auto; }
+  section { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; margin-bottom:12px; }
+  h2 { margin:0 0 10px; font-size:18px; }
+  label { display:block; font-size:14px; color:var(--muted); margin:8px 0 4px; }
+  input, select, button { width:100%; font:inherit; padding:12px; border-radius:8px; border:1px solid var(--line); background:var(--bg); color:var(--text); }
+  button { background:var(--accent); color:#fff; border:0; margin-top:12px; font-weight:600; }
+  .row { display:flex; justify-content:space-between; gap:8px; padding:10px 0; border-bottom:1px solid var(--line); }
+  .row:last-child { border-bottom:0; }
+  .muted { color:var(--muted); font-size:14px; }
+  .debt { color:var(--bad); font-weight:600; white-space:nowrap; }
+  #msg { min-height:1.2em; margin-top:8px; font-size:14px; }
+</style>
+</head>
+<body>
+<main>
+  <section>
+    <h2>Должники</h2>
+    <input type="month" id="month">
+    <div id="list"></div>
+  </section>
+  <section>
+    <h2>Добавить оплату</h2>
+    <label for="student">Ученик</label>
+    <select id="student"></select>
+    <label for="amount">Сумма</label>
+    <input id="amount" type="number" inputmode="numeric" min="1" step="1">
+    <label for="date">Дата</label>
+    <input id="date" type="date">
+    <button id="send">Внести оплату</button>
+    <div id="msg" role="status"></div>
+  </section>
+  <section>
+    <h2>Добавить ученика</h2>
+    <label for="sname">Имя</label>
+    <input id="sname" autocomplete="off">
+    <label for="sphone">Телефон</label>
+    <input id="sphone" type="tel" autocomplete="off">
+    <label for="sgroup">Группа</label>
+    <input id="sgroup" autocomplete="off">
+    <label for="sfee">Месячная сумма</label>
+    <input id="sfee" type="number" inputmode="numeric" min="0" step="1">
+    <button id="addStudent">Добавить ученика</button>
+    <div id="smsg" role="status" class="muted"></div>
+  </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const today = new Date().toISOString().slice(0, 10);
+$('month').value = today.slice(0, 7);
+$('date').value = today;
+const fmt = n => n.toLocaleString('ru-RU');
+
+async function api(url, opts) {
+  const r = await fetch(url, opts);
+  if (!r.ok) {
+    let d = ''; try { d = (await r.json()).detail; } catch {}
+    throw new Error(typeof d === 'string' && d ? d : 'Ошибка ' + r.status);
+  }
+  return r.status === 204 ? null : r.json();
+}
+
+async function loadDebtors() {
+  const box = $('list'); box.textContent = '';
+  try {
+    const rows = await api('/debtors?month=' + $('month').value);
+    if (!rows.length) { box.innerHTML = '<p class="muted">Должников нет 🎉</p>'; return; }
+    for (const r of rows) {
+      const d = document.createElement('div'); d.className = 'row';
+      const l = document.createElement('div');
+      const n = document.createElement('div'); n.textContent = `#${r.id} ${r.name}`;
+      const m = document.createElement('div'); m.className = 'muted';
+      m.textContent = `${r.group} · ${r.phone} · оплачено ${fmt(r.paid)} из ${fmt(r.monthly_fee)}`;
+      l.append(n, m);
+      const s = document.createElement('div'); s.className = 'debt'; s.textContent = '−' + fmt(r.debt);
+      d.append(l, s); box.append(d);
+    }
+  } catch (e) { box.textContent = e.message; }
+}
+
+async function loadStudents() {
+  const sel = $('student'); sel.textContent = '';
+  try {
+    for (const s of await api('/students')) {
+      const o = document.createElement('option'); o.value = s.id;
+      o.textContent = `#${s.id} ${s.name} (${s.group})`; sel.append(o);
+    }
+  } catch (e) { $('msg').textContent = e.message; }
+}
+
+$('month').addEventListener('change', loadDebtors);
+$('send').addEventListener('click', async () => {
+  const msg = $('msg'); msg.textContent = '';
+  const amount = parseInt($('amount').value, 10);
+  if (!$('student').value || !(amount > 0)) { msg.textContent = 'Выберите ученика и введите сумму'; return; }
+  try {
+    await api('/payments', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ student_id: +$('student').value, amount, paid_at: $('date').value || null }) });
+    msg.textContent = 'Оплата внесена ✓'; $('amount').value = ''; loadDebtors();
+  } catch (e) { msg.textContent = e.message; }
+});
+$('addStudent').addEventListener('click', async () => {
+  const m = $('smsg'); m.textContent = '';
+  const body = { name: $('sname').value.trim(), phone: $('sphone').value.trim(),
+    group: $('sgroup').value.trim(), monthly_fee: parseInt($('sfee').value, 10) };
+  if (!body.name || !body.phone || !body.group || !(body.monthly_fee >= 0)) {
+    m.textContent = 'Заполните все поля'; return;
+  }
+  try {
+    await api('/students', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body) });
+    m.textContent = 'Ученик добавлен ✓';
+    for (const id of ['sname', 'sphone', 'sgroup', 'sfee']) $(id).value = '';
+    loadStudents(); loadDebtors();
+  } catch (e) { m.textContent = e.message; }
+});
+loadStudents(); loadDebtors();
+</script>
+</body>
+</html>
